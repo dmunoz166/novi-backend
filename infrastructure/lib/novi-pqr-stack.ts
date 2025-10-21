@@ -99,7 +99,7 @@ export class NoviPqrStack extends cdk.Stack {
     const invokeAgentLambda = new lambda.Function(this, 'InvokeAgentFunction', {
       functionName: 'novi-invoke-agent',
       runtime: lambda.Runtime.PYTHON_3_12,
-      handler: 'invoke_agent.lambda_handler',
+      handler: 'invoke_agent.handler',
       code: lambda.Code.fromAsset('../lambda-functions', {
         bundling: {
           image: lambda.Runtime.PYTHON_3_12.bundlingImage,

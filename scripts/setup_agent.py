@@ -130,47 +130,71 @@ Ayuda a crear PQR y consultar su estado. Mantén un tono profesional y empático
         return None
 
 def create_agent_alias(agent_id):
-    """Crear alias para el agente"""
+    """Crear alias para el agente o usar TSTALIASID existente"""
     try:
-        response = bedrock_agent.create_agent_alias(
-            agentId=agent_id,
-            agentAliasName='AgentTestAlias',
-            routingConfiguration=[
-                {
-                    'agentVersion': 'DRAFT'
-                }
-            ]
-        )
-        
-        alias_id = response['agentAlias']['agentAliasId']
-        print(f"✅ Alias creado: {alias_id}")
+        # Usar TSTALIASID por defecto (siempre existe)
+        alias_id = 'TSTALIASID'
+        print(f"✅ Usando alias por defecto: {alias_id}")
         return alias_id
         
-    except ClientError as e:
-        print(f"❌ Error creando alias: {e}")
-        return None
+    except Exception as e:
+        print(f"❌ Error con alias: {e}")
+        return 'TSTALIASID'
 
 def prepare_agent(agent_id):
     """Preparar agente"""
     try:
-        response = bedrock_agent.prepare_agent(agentId=agent_id)
-        print(f"✅ Agente preparado: {response['agentStatus']}")
+        # Verificar estado actual
+        status_response = bedrock_agent.get_agent(agentId=agent_id)
+        current_status = status_response['agent']['agentStatus']
+        
+        if current_status == 'PREPARED':
+            print(f"✅ Agente ya preparado")
+            return True
+        elif current_status == 'CREATING':
+            print(f"⏳ Agente en creación, esperando...")
+            # Esperar a que termine de crear
+            for i in range(12):
+                time.sleep(5)
+                status_response = bedrock_agent.get_agent(agentId=agent_id)
+                status = status_response['agent']['agentStatus']
+                print(f"Estado del agente: {status}")
+                
+                if status in ['NOT_PREPARED', 'PREPARED']:
+                    break
+                elif status == 'FAILED':
+                    print("❌ Creación falló")
+                    return False
+        
+        # Intentar preparar si no está preparado
+        current_status = bedrock_agent.get_agent(agentId=agent_id)['agent']['agentStatus']
+        if current_status != 'PREPARED':
+            try:
+                response = bedrock_agent.prepare_agent(agentId=agent_id)
+                print(f"✅ Agente preparándose: {response['agentStatus']}")
+            except ClientError as e:
+                if 'Creating state' in str(e):
+                    print("⏳ Agente aún en creación, esperando...")
+                    time.sleep(10)
+                    return prepare_agent(agent_id)
+                else:
+                    raise e
         
         # Esperar a que esté listo
-        while True:
+        for i in range(12):
             status_response = bedrock_agent.get_agent(agentId=agent_id)
             status = status_response['agent']['agentStatus']
             print(f"Estado del agente: {status}")
             
             if status == 'PREPARED':
-                break
+                return True
             elif status == 'FAILED':
                 print("❌ Preparación falló")
                 return False
                 
             time.sleep(5)
         
-        return True
+        return False
         
     except ClientError as e:
         print(f"❌ Error preparando agente: {e}")
@@ -203,10 +227,10 @@ Región: {REGION}
 Modelo: Amazon Nova Pro
 FAQs: Integradas desde S3
 
-Para probar:
-curl -X POST https://your-api-gateway-url/agent \\
-  -H "Content-Type: application/json" \\
-  -d '{{"message": "Hola Novi"}}'
+AGENT_INFO_START
+Agent ID: {agent_id}
+Alias ID: {alias_id}
+AGENT_INFO_END
 """)
 
 if __name__ == "__main__":

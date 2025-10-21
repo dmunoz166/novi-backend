@@ -1,0 +1,9 @@
+{
+  "NoviPqrStack": {
+    "TableName": "novi-pqr-table",
+    "BedrockAgentRoleArn": "arn:aws:iam::436187211477:role/NoviPqrStack-BedrockAgentRole7C982E0C-9YfNYqr9Ak5a",
+    "ApiUrl": "https://uuwyl5urj2.execute-api.us-west-2.amazonaws.com/prod/",
+    "SetupCommand": "cd ../scripts && BEDROCK_AGENT_ROLE_ARN=arn:aws:iam::436187211477:role/NoviPqrStack-BedrockAgentRole7C982E0C-9YfNYqr9Ak5a python3 setup_agent.py",
+    "NoviPqrApiEndpoint875B4B4F": "https://uuwyl5urj2.execute-api.us-west-2.amazonaws.com/prod/"
+  }
+}
