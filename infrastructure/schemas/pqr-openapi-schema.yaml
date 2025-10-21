@@ -1,0 +1,82 @@
+openapi: 3.0.0
+info:
+  title: Novi PQR API
+  version: 1.0.0
+  description: API para gestión de PQR
+
+paths:
+  /createPQR:
+    post:
+      description: Crear una nueva PQR en el sistema. Requiere email, descripción, prioridad y categoría.
+      operationId: createPQR
+      parameters:
+        - name: customer_email
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Email del cliente
+        - name: description
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Descripción del problema
+        - name: priority
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: ["ALTA", "MEDIA", "BAJA"]
+          description: Prioridad de la PQR
+        - name: category
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: ["PEDIDOS", "GENERAL", "SOPORTE", "FACTURACION"]
+          description: Categoría de la PQR
+      responses:
+        '200':
+          description: PQR creada exitosamente
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pqr_id:
+                    type: string
+                  status:
+                    type: string
+                  message:
+                    type: string
+
+  /checkPQR:
+    post:
+      description: Consultar el estado de una PQR existente usando su ID
+      operationId: checkPQR
+      parameters:
+        - name: pqr_id
+          in: query
+          required: true
+          schema:
+            type: string
+          description: ID de la PQR a consultar
+      responses:
+        '200':
+          description: Estado de PQR encontrado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pqr_id:
+                    type: string
+                  status:
+                    type: string
+                  customer_email:
+                    type: string
+                  description:
+                    type: string
+                  created_at:
+                    type: string

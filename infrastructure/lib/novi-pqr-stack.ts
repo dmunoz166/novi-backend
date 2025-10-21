@@ -3,64 +3,81 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as s3 from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
 
 export class NoviPqrStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
-    // Tabla DynamoDB para almacenar PQRs - configuración simple
+    // Tabla DynamoDB para almacenar PQRs
     const pqrTable = new dynamodb.Table(this, 'PqrTable', {
       tableName: 'novi-pqr-table',
       partitionKey: { name: 'pqr_id', type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST, // Simplicidad: sin provisioning
-      removalPolicy: cdk.RemovalPolicy.DESTROY, // Para MVP, permitir destrucción
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
-    // Rol IAM para las funciones Lambda - permisos básicos
+    // Bucket S3 para FAQs (referencia al existente)
+    const faqsBucket = s3.Bucket.fromBucketName(this, 'FaqsBucket', 'novi-pqr-faqs-bucket');
+
+    // Rol IAM para las funciones Lambda
     const lambdaRole = new iam.Role(this, 'NoviLambdaRole', {
       assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
       managedPolicies: [
         iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
       ],
       inlinePolicies: {
-        DynamoDBAccess: new iam.PolicyDocument({
+        NoviPermissions: new iam.PolicyDocument({
           statements: [
+            // DynamoDB
             new iam.PolicyStatement({
               effect: iam.Effect.ALLOW,
-              actions: [
-                'dynamodb:GetItem',
-                'dynamodb:PutItem',
-                'dynamodb:UpdateItem',
-                'dynamodb:Query',
-                'dynamodb:Scan'
-              ],
+              actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem'],
               resources: [pqrTable.tableArn],
             }),
-          ],
-        }),
-        BedrockAccess: new iam.PolicyDocument({
-          statements: [
+            // Bedrock
             new iam.PolicyStatement({
               effect: iam.Effect.ALLOW,
               actions: [
-                'bedrock:InvokeModel',
-                'bedrock-agent:InvokeAgent',
-                'bedrock-agent:GetAgent',
-                'bedrock-agent:ListAgents'
+                'bedrock-agent-runtime:InvokeAgent',
+                'bedrock-agent:*',
+                'bedrock:*'
               ],
-              resources: ['*'], // Simplicidad: permisos amplios para MVP
+              resources: ['*'],
             }),
+            // S3
+            new iam.PolicyStatement({
+              effect: iam.Effect.ALLOW,
+              actions: ['s3:GetObject', 's3:ListBucket'],
+              resources: [faqsBucket.bucketArn, `${faqsBucket.bucketArn}/*`]
+            })
           ],
         }),
       },
     });
 
-    // Lambda para crear PQR
-    const createPqrLambda = new lambda.Function(this, 'CreatePqrFunction', {
-      functionName: 'novi-create-pqr',
+    // Rol IAM para Bedrock Agent
+    const bedrockAgentRole = new iam.Role(this, 'BedrockAgentRole', {
+      assumedBy: new iam.ServicePrincipal('bedrock.amazonaws.com'),
+      inlinePolicies: {
+        LambdaInvokePolicy: new iam.PolicyDocument({
+          statements: [
+            new iam.PolicyStatement({
+              effect: iam.Effect.ALLOW,
+              actions: ['lambda:InvokeFunction'],
+              resources: [`arn:aws:lambda:${this.region}:${this.account}:function:novi-bedrock-actions`]
+            })
+          ]
+        })
+      }
+    });
+
+    // Lambda: bedrock-actions (unificada)
+    const bedrockActionsLambda = new lambda.Function(this, 'BedrockActionsFunction', {
+      functionName: 'novi-bedrock-actions',
       runtime: lambda.Runtime.PYTHON_3_12,
-      handler: 'create_pqr.handler',
+      handler: 'bedrock_actions.handler',
       code: lambda.Code.fromAsset('../lambda-functions', {
         bundling: {
           image: lambda.Runtime.PYTHON_3_12.bundlingImage,
@@ -78,11 +95,11 @@ export class NoviPqrStack extends cdk.Stack {
       timeout: cdk.Duration.seconds(30),
     });
 
-    // Lambda para consultar PQR
-    const checkPqrLambda = new lambda.Function(this, 'CheckPqrFunction', {
-      functionName: 'novi-check-pqr',
+    // Lambda: invoke-agent
+    const invokeAgentLambda = new lambda.Function(this, 'InvokeAgentFunction', {
+      functionName: 'novi-invoke-agent',
       runtime: lambda.Runtime.PYTHON_3_12,
-      handler: 'check_pqr.handler',
+      handler: 'invoke_agent.lambda_handler',
       code: lambda.Code.fromAsset('../lambda-functions', {
         bundling: {
           image: lambda.Runtime.PYTHON_3_12.bundlingImage,
@@ -94,41 +111,46 @@ export class NoviPqrStack extends cdk.Stack {
       }),
       role: lambdaRole,
       environment: {
-        'PQR_TABLE_NAME': pqrTable.tableName,
+        'BEDROCK_AGENT_ID': 'PLACEHOLDER', // Se actualiza después
+        'BEDROCK_AGENT_ALIAS_ID': 'PLACEHOLDER',
         'REGION': 'us-west-2'
       },
-      timeout: cdk.Duration.seconds(30),
+      timeout: cdk.Duration.seconds(60),
     });
 
-    // API Gateway REST API - configuración simple
+    // API Gateway
     const api = new apigateway.RestApi(this, 'NoviPqrApi', {
       restApiName: 'novi-pqr-api',
       description: 'API para gestión de PQRs de Novi',
       defaultCorsPreflightOptions: {
-        allowOrigins: apigateway.Cors.ALL_ORIGINS, // Simplicidad: CORS abierto para MVP
+        allowOrigins: apigateway.Cors.ALL_ORIGINS,
         allowMethods: apigateway.Cors.ALL_METHODS,
       },
     });
 
-    // Endpoints de la API
-    const pqrResource = api.root.addResource('pqr');
-    
-    // POST /pqr - crear PQR
-    pqrResource.addMethod('POST', new apigateway.LambdaIntegration(createPqrLambda));
-    
-    // GET /pqr/{pqr_id} - consultar PQR
-    const pqrIdResource = pqrResource.addResource('{pqr_id}');
-    pqrIdResource.addMethod('GET', new apigateway.LambdaIntegration(checkPqrLambda));
+    // Endpoint principal: POST /agent
+    const agentResource = api.root.addResource('agent');
+    agentResource.addMethod('POST', new apigateway.LambdaIntegration(invokeAgentLambda));
 
-    // Outputs para facilitar testing
+    // Outputs
     new cdk.CfnOutput(this, 'ApiUrl', {
       value: api.url,
-      description: 'URL base de la API de Novi PQR',
+      description: 'URL de la API'
     });
 
-    new cdk.CfnOutput(this, 'PqrTableName', {
+    new cdk.CfnOutput(this, 'TableName', {
       value: pqrTable.tableName,
-      description: 'Nombre de la tabla DynamoDB para PQRs',
+      description: 'Nombre de la tabla DynamoDB'
+    });
+
+    new cdk.CfnOutput(this, 'BedrockAgentRoleArn', {
+      value: bedrockAgentRole.roleArn,
+      description: 'ARN del rol para Bedrock Agent - usar en setup_agent.py'
+    });
+
+    new cdk.CfnOutput(this, 'SetupCommand', {
+      value: `cd ../scripts && BEDROCK_AGENT_ROLE_ARN=${bedrockAgentRole.roleArn} python3 setup_agent.py`,
+      description: 'Comando para configurar el agente después del deploy'
     });
   }
 }

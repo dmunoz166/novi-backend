@@ -138,28 +138,30 @@ Novi es un agente inteligente para gestionar PQR (Peticiones, Quejas y Reclamos)
 - **Guardrails:** Configuración de filtros de contenido y políticas de temas
 - **Prompt Engineering:** Sistema de prompts dinámicos con integración de FAQs
 - **Session Management:** Manejo de sesiones de conversación con clientes
+- **Infrastructure as Code:** Configuración completa via CDK con bedrock.CfnAgent
 
 ### RT-004: Integración de Notificaciones
 - **Amazon SNS:** Servicio principal para notificaciones
 - **Email:** Notificaciones por email via SNS
 - **Templates:** Mensajes estructurados para confirmación de PQR
 
-### RT-005: Infrastructure as Code (CDK)
+### RT-006: Infrastructure as Code (CDK)
 - **Deployment Automatizado:** Toda la infraestructura debe ser desplegada usando AWS CDK
 - **Versionado:** Infraestructura versionada junto con el código de aplicación
 - **Reproducibilidad:** Entornos idénticos en desarrollo, staging y producción
 - **Stack Principal:** Un stack CDK que incluya todos los recursos AWS necesarios
+- **Bedrock Agent:** Configuración completa via bedrock.CfnAgent
 
-### RT-006: Estructura CDK
+### RT-007: Estructura CDK
 ```typescript
 // Stack principal que incluye:
 - DynamoDB Table (novi-pqr)
 - Lambda Functions (create-pqr, check-pqr, invoke-agent, process-faqs-template)
 - API Gateway REST API
 - SNS Topic para notificaciones
-- S3 Bucket para FAQs
+- S3 Bucket para OpenAPI schemas
 - IAM Roles y Policies
-- Bedrock Agent (configuración manual inicial)
+- Bedrock Agent (bedrock.CfnAgent)
 ```
 - **Reglas de Negocio:** Sistema basado en palabras clave
 ### RT-007: Categorización Automática

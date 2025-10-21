@@ -14,11 +14,11 @@ API Gateway (REST)
        ↓
 Lambda: invoke-agent (Python 3.12)
        ↓
-Amazon Bedrock Agent (novi-agent)
+Amazon Bedrock Agent (novi-agent) - Amazon Nova Pro
        ↓
 Action Groups (OpenAPI)
        ↓
-Lambda Functions (create-pqr, check-pqr) - Python 3.12
+Lambda: bedrock-actions (Unificada) - Python 3.12
        ↓
 DynamoDB (Simplificado) + SNS (Email)
 ```
@@ -128,10 +128,11 @@ paths:
 
 ## 5. Código Lambda Functions (Python 3.12)
 
-### 5.1 Lambda: invoke-agent
+### 5.1 Lambda: invoke-agent (Proxy Bedrock)
 ```python
 import json
 import boto3
+import hashlib
 import os
 
 bedrock_agent = boto3.client('bedrock-agent-runtime', region_name='us-west-2')
@@ -142,12 +143,25 @@ def lambda_handler(event, context):
         body = json.loads(event['body']) if isinstance(event['body'], str) else event['body']
         input_text = body.get('message', '')
         
+        # Session management con IP + User-Agent
+        ip = event.get('requestContext', {}).get('identity', {}).get('sourceIp', 'unknown')
+        user_agent = event.get('headers', {}).get('User-Agent', 'unknown')
+        session_id = hashlib.md5(f"{ip}-{user_agent}".encode()).hexdigest()[:16]
+        
         response = bedrock_agent.invoke_agent(
             agentId=os.environ['BEDROCK_AGENT_ID'],
             agentAliasId=os.environ['BEDROCK_AGENT_ALIAS_ID'],
-            sessionId=context.aws_request_id,
+            sessionId=session_id,
             inputText=input_text
         )
+        
+        # Procesar EventStream
+        result = ""
+        for event in response.get('completion', []):
+            if 'chunk' in event:
+                chunk = event['chunk']
+                if 'bytes' in chunk:
+                    result += chunk['bytes'].decode('utf-8')
         
         return {
             'statusCode': 200,
@@ -155,7 +169,7 @@ def lambda_handler(event, context):
                 'Content-Type': 'application/json',
                 'Access-Control-Allow-Origin': '*'
             },
-            'body': json.dumps(response, default=str)
+            'body': json.dumps({'response': result})
         }
         
     except Exception as e:
@@ -166,140 +180,166 @@ def lambda_handler(event, context):
         }
 ```
 
-### 5.2 Lambda: create-pqr
+### 5.2 Lambda: bedrock-actions (Action Groups Unificadas)
 ```python
 import json
 import boto3
 import os
-from datetime import datetime
+import time
 
-dynamodb = boto3.resource('dynamodb', region_name='us-west-2')
-sns = boto3.client('sns', region_name='us-west-2')
-table = dynamodb.Table(os.environ['PQR_TABLE_NAME'])
-
-def lambda_handler(event, context):
+def handler(event, context):
+    """Lambda unificada para Action Groups de Bedrock Agent"""
     try:
-        # Parsear payload
-        body = json.loads(event['body']) if isinstance(event['body'], str) else event['body']
+        # Extraer información del evento de Bedrock Agent
+        action_group = event.get('actionGroup', '')
+        api_path = event.get('apiPath', '')
+        http_method = event.get('httpMethod', '')
+        parameters = event.get('parameters', [])
+        request_body = event.get('requestBody', {})
         
-        # Validar campos requeridos
-        required_fields = ['customerName', 'customerEmail', 'category', 'description']
-        for field in required_fields:
-            if not body.get(field):
-                return {
-                    'statusCode': 400,
-                    'body': json.dumps({'error': f'Campo requerido faltante: {field}'})
-                }
+        # Convertir parámetros a diccionario
+        params_dict = {}
+        for param in parameters:
+            params_dict[param['name']] = param['value']
         
-        # Generar ID único
-        pqr_id = f"PQR-{datetime.now().year}-{int(datetime.now().timestamp())}"
-        timestamp = datetime.now().isoformat()
+        # Extraer contenido del request body
+        body_content = {}
+        if request_body and 'content' in request_body:
+            for content_type, content in request_body['content'].items():
+                if 'properties' in content:
+                    for prop in content['properties']:
+                        body_content[prop['name']] = prop['value']
         
-        # Crear item PQR
-        pqr_item = {
-            'pqrId': pqr_id,
-            'customerName': body['customerName'],
-            'customerEmail': body['customerEmail'],
-            'invoiceNumber': body.get('invoiceNumber', ''),
-            'category': body['category'],
-            'description': body['description'],
-            'status': 'CREADA',
-            'createdAt': timestamp,
-            'updatedAt': timestamp,
-            'timeline': [
-                {
-                    'timestamp': timestamp,
-                    'status': 'CREADA',
-                    'comment': 'PQR creada automáticamente'
-                }
-            ]
-        }
+        # Combinar parámetros
+        all_params = {**params_dict, **body_content}
         
-        # Guardar en DynamoDB
-        table.put_item(Item=pqr_item)
+        # Enrutar según la operación
+        if api_path == '/createPQR' and http_method == 'POST':
+            result = create_pqr(all_params)
+        elif api_path == '/checkPQR' and http_method == 'POST':
+            result = check_pqr(all_params)
+        else:
+            result = {'error': f'Operación no soportada: {http_method} {api_path}'}
         
-        # Enviar notificación email
-        sns.publish(
-            TopicArn=os.environ['SNS_TOPIC_ARN'],
-            Subject=f'PQR Creada: {pqr_id}',
-            Message=f"""Su PQR ha sido creada exitosamente.
-
-Número de ticket: {pqr_id}
-Estado: CREADA
-
-Descripción: {body['description']}
-
-Recibirá actualizaciones por email."""
-        )
-        
+        # Formato de respuesta para Bedrock Agent
         return {
-            'statusCode': 200,
-            'body': json.dumps({
-                'pqrId': pqr_id,
-                'status': 'CREADA',
-                'nextSteps': 'Su PQR ha sido registrada. Recibirá actualizaciones por email.'
-            })
-        }
-        
-    except Exception as e:
-        print(f"Error: {str(e)}")
-        return {
-            'statusCode': 500,
-            'body': json.dumps({'error': 'Error interno del servidor'})
-        }
-```
-
-### 5.3 Lambda: check-pqr
-```python
-import json
-import boto3
-import os
-
-dynamodb = boto3.resource('dynamodb', region_name='us-west-2')
-table = dynamodb.Table(os.environ['PQR_TABLE_NAME'])
-
-def lambda_handler(event, context):
-    try:
-        pqr_id = event['pathParameters']['pqrId']
-        
-        # Consultar PQR
-        response = table.get_item(Key={'pqrId': pqr_id})
-        
-        if 'Item' not in response:
-            return {
-                'statusCode': 404,
-                'body': json.dumps({'error': 'PQR no encontrada'})
+            'messageVersion': '1.0',
+            'response': {
+                'actionGroup': action_group,
+                'apiPath': api_path,
+                'httpMethod': http_method,
+                'httpStatusCode': 200,
+                'responseBody': {
+                    'application/json': {
+                        'body': json.dumps(result)
+                    }
+                }
             }
-        
-        pqr = response['Item']
-        
-        # Preparar respuesta
-        result = {
-            'pqrId': pqr['pqrId'],
-            'status': pqr['status'],
-            'createdAt': pqr['createdAt'],
-            'updatedAt': pqr['updatedAt'],
-            'timeline': pqr['timeline']
-        }
-        
-        return {
-            'statusCode': 200,
-            'body': json.dumps(result, default=str)
         }
         
     except Exception as e:
-        print(f"Error: {str(e)}")
+        print(f"Error en bedrock_actions: {str(e)}")
         return {
-            'statusCode': 500,
-            'body': json.dumps({'error': 'Error consultando PQR'})
+            'messageVersion': '1.0',
+            'response': {
+                'actionGroup': action_group,
+                'apiPath': api_path,
+                'httpMethod': http_method,
+                'httpStatusCode': 500,
+                'responseBody': {
+                    'application/json': {
+                        'body': json.dumps({'error': 'Error interno del servidor'})
+                    }
+                }
+            }
         }
+
+def create_pqr(params):
+    """Crear nueva PQR"""
+    # Validar parámetros requeridos
+    required_fields = ['customer_email', 'description', 'priority', 'category']
+    for field in required_fields:
+        if field not in params or not params[field]:
+            return {'error': f'Campo requerido faltante: {field}'}
+    
+    # Generar ID único y guardar en DynamoDB
+    pqr_id = f"pqr_{int(time.time())}"
+    dynamodb = boto3.resource('dynamodb', region_name=os.environ['REGION'])
+    table = dynamodb.Table(os.environ['PQR_TABLE_NAME'])
+    
+    item = {
+        'pqr_id': pqr_id,
+        'customer_email': params['customer_email'],
+        'description': params['description'],
+        'priority': params['priority'],
+        'category': params['category'],
+        'status': 'CREADA',
+        'created_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+    }
+    
+    table.put_item(Item=item)
+    
+    return {
+        'pqr_id': pqr_id,
+        'status': 'CREADA',
+        'message': 'PQR creada exitosamente'
+    }
+
+def check_pqr(params):
+    """Consultar PQR existente"""
+    pqr_id = params.get('pqr_id')
+    if not pqr_id:
+        return {'error': 'pqr_id requerido'}
+    
+    # Consultar DynamoDB
+    dynamodb = boto3.resource('dynamodb', region_name=os.environ['REGION'])
+    table = dynamodb.Table(os.environ['PQR_TABLE_NAME'])
+    
+    response = table.get_item(Key={'pqr_id': pqr_id})
+    
+    if 'Item' not in response:
+        return {'error': 'PQR no encontrada'}
+    
+    item = response['Item']
+    return {
+        'pqr_id': item['pqr_id'],
+        'customer_email': item['customer_email'],
+        'description': item['description'],
+        'status': item['status'],
+        'created_at': item['created_at']
+    }
 ```
 
-## 6. Configuración Bedrock Agent
+## 6. Configuración Bedrock Agent (CDK)
 
-### 6.1 Integración de FAQs con Jinja2
+### 6.1 Recurso bedrock.CfnAgent en CDK
+```typescript
+const bedrockAgent = new bedrock.CfnAgent(this, 'NoviAgent', {
+  agentName: 'novi-pqr-agent',
+  description: 'Agente para gestión de PQR de NovaMarket',
+  foundationModel: 'arn:aws:bedrock:us-west-2:436187211477:inference-profile/us.amazon.nova-pro-v1:0',
+  instruction: 'Eres Novi, asistente de PQR para NovaMarket...',
+  agentResourceRoleArn: bedrockAgentRole.roleArn,
+  autoPrepare: true,
+  actionGroups: [{
+    actionGroupName: 'pqr-actions',
+    description: 'Acciones para crear y consultar PQR',
+    apiSchema: {
+      s3: {
+        s3BucketName: openApiSchemaBucket.bucketName,
+        s3ObjectKey: 'openapi-schema.yaml'
+      }
+    },
+    actionGroupExecutor: {
+      lambda: bedrockActionsFunction.functionArn
+    }
+  }]
+});
+```
 
-**Archivo CSV: @prompts/faqs-novi.csv**
+### 6.2 Integración de FAQs con Jinja2
+
+**Archivo CSV: prompts/faqs-novi.csv**
 ```csv
 pregunta,respuesta,categoria
 "¿Cuánto tiempo tarda en procesarse una PQR?","Las PQR se procesan en un plazo de 24-48 horas hábiles","TIEMPOS"
