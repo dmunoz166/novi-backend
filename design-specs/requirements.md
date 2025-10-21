@@ -28,6 +28,17 @@ Novi es un agente inteligente para gestionar PQR (Peticiones, Quejas y Reclamos)
 - Veo la fecha de creación y última actualización
 - Veo comentarios o actualizaciones del agente
 
+### HU-004: Consultar FAQs Antes de Crear PQR
+**Como** cliente  
+**Quiero** obtener respuestas a preguntas frecuentes  
+**Para** resolver mi consulta sin necesidad de crear una PQR  
+
+**Criterios de Aceptación:**
+- El agente consulta FAQs automáticamente antes de crear PQR
+- Recibo respuesta inmediata si mi consulta está en las FAQs
+- Solo se crea PQR si el problema no está cubierto en FAQs
+- Las FAQs se actualizan dinámicamente desde archivo CSV
+
 ### HU-003: Recibir Notificación Inmediata
 **Como** cliente  
 **Quiero** recibir confirmación inmediata cuando creo una PQR  
@@ -52,6 +63,13 @@ Novi es un agente inteligente para gestionar PQR (Peticiones, Quejas y Reclamos)
 - **Historial:** Mostrar cronología de cambios de estado
 - **Información Detallada:** Mostrar descripción, categoría, fechas y comentarios
 
+### RF-004: Sistema de FAQs Integrado
+- **Consulta Automática:** El agente debe consultar FAQs antes de crear PQR
+- **Respuesta Directa:** Proporcionar respuestas inmediatas para consultas comunes
+- **Actualización Dinámica:** FAQs actualizables via archivo CSV en S3
+- **Template Engine:** Uso de Jinja2 para integrar FAQs en prompt del agente
+- **Categorización:** FAQs organizadas por categorías (TIEMPOS, CANCELACIONES, ENTREGAS, ESTADOS)
+
 ### RF-003: Sistema de Notificaciones
 - **Notificación de Creación:** Enviar confirmación inmediata al crear PQR
 - **Canales:** Email como canal principal (SNS como stub)
@@ -60,46 +78,71 @@ Novi es un agente inteligente para gestionar PQR (Peticiones, Quejas y Reclamos)
 ## Requisitos Técnicos
 
 ### RT-001: Arquitectura del Sistema
-- **Backend:** API REST con Node.js/Express
-- **Base de Datos:** PostgreSQL para persistencia de PQR
-- **Autenticación:** JWT para identificación de usuarios
-- **Documentación:** OpenAPI/Swagger para endpoints
+- **Backend:** Arquitectura serverless con Amazon Bedrock Agent
+- **Base de Datos:** DynamoDB para persistencia de PQR
+- **Compute:** AWS Lambda Functions (Python 3.12)
+- **API:** Amazon API Gateway + Bedrock Agent Action Groups
+- **Región:** us-west-2 (Oregon)
 
-### RT-002: Modelo de Datos
-```sql
--- Tabla principal de PQR
-CREATE TABLE pqr (
-    id SERIAL PRIMARY KEY,
-    ticket_number VARCHAR(20) UNIQUE NOT NULL,
-    customer_email VARCHAR(255) NOT NULL,
-    description TEXT NOT NULL,
-    category VARCHAR(100),
-    status VARCHAR(50) DEFAULT 'Creada',
-    created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
-);
-
--- Tabla de historial de estados
-CREATE TABLE pqr_history (
-    id SERIAL PRIMARY KEY,
-    pqr_id INTEGER REFERENCES pqr(id),
-    previous_status VARCHAR(50),
-    new_status VARCHAR(50),
-    comment TEXT,
-    changed_at TIMESTAMP DEFAULT NOW()
-);
+### RT-002: Modelo de Datos DynamoDB
+```json
+{
+  "TableName": "novi-pqr",
+  "KeySchema": [
+    {
+      "AttributeName": "pqrId",
+      "KeyType": "HASH"
+    }
+  ],
+  "AttributeDefinitions": [
+    {
+      "AttributeName": "pqrId",
+      "AttributeType": "S"
+    }
+  ],
+  "BillingMode": "PAY_PER_REQUEST"
+}
 ```
 
-### RT-003: Endpoints API
-- **POST /api/pqr** - Crear nueva PQR
-- **GET /api/pqr/:ticketNumber** - Consultar PQR por ticket
-- **PUT /api/pqr/:ticketNumber/status** - Actualizar estado
-- **GET /api/pqr/:ticketNumber/history** - Obtener historial
+**Estructura de Item PQR:**
+```json
+{
+  "pqrId": "PQR-2024-001234",
+  "customerName": "Juan Pérez",
+  "customerEmail": "juan@email.com",
+  "invoiceNumber": "INV-2024-5678",
+  "category": "PEDIDO_INCOMPLETO",
+  "description": "Mi pedido llegó incompleto, faltan 2 productos",
+  "status": "CREADA",
+  "createdAt": "2024-10-21T17:52:02Z",
+  "updatedAt": "2024-10-21T17:52:02Z",
+  "timeline": [
+    {
+      "timestamp": "2024-10-21T17:52:02Z",
+      "status": "CREADA",
+      "comment": "PQR creada automáticamente"
+    }
+  ]
+}
+```
+
+### RT-003: Endpoints API y Action Groups
+- **POST /agent** - Endpoint principal para interactuar con Bedrock Agent
+- **Action Group: createPQR** - Crear nueva PQR via Bedrock Agent
+- **Action Group: checkPQR** - Consultar PQR por ticket via Bedrock Agent
+- **Documentación:** OpenAPI specification para Action Groups
+
+### RT-005: Amazon Bedrock Agent
+- **Foundation Model:** Claude 3.5 Sonnet para procesamiento de lenguaje natural
+- **Action Groups:** Integración con Lambda functions via OpenAPI specification
+- **Guardrails:** Configuración de filtros de contenido y políticas de temas
+- **Prompt Engineering:** Sistema de prompts dinámicos con integración de FAQs
+- **Session Management:** Manejo de sesiones de conversación con clientes
 
 ### RT-004: Integración de Notificaciones
-- **Email Service:** Integración con servicio SMTP
-- **SNS Stub:** Preparación para Amazon SNS (implementación futura)
-- **Templates:** Plantillas HTML para emails de notificación
+- **Amazon SNS:** Servicio principal para notificaciones
+- **Email:** Notificaciones por email via SNS
+- **Templates:** Mensajes estructurados para confirmación de PQR
 
 ### RT-005: Infrastructure as Code (CDK)
 - **Deployment Automatizado:** Toda la infraestructura debe ser desplegada usando AWS CDK
@@ -183,6 +226,26 @@ CREATE TABLE pqr_history (
 - Manejo de errores implementado
 - Validación de datos de entrada
 - Logs estructurados para debugging
+
+## Matriz de Trazabilidad
+
+### Historias de Usuario → Requisitos Funcionales → Implementación
+| Historia | Requisito Funcional | Componente Técnico | Estado |
+|----------|-------------------|-------------------|---------|
+| HU-001 | RF-001 | create-pqr Lambda + DynamoDB | ✅ Especificado |
+| HU-002 | RF-002 | check-pqr Lambda + DynamoDB | ✅ Especificado |
+| HU-003 | RF-003 | SNS + Email Templates | ✅ Especificado |
+| HU-004 | RF-004 | Bedrock Agent + FAQs S3 + Jinja2 | ✅ Especificado |
+
+### Requisitos Técnicos → Componentes AWS
+| Requisito | Servicio AWS | Configuración | Estado |
+|-----------|-------------|---------------|---------|
+| RT-001 | Lambda + API Gateway | Python 3.12, us-west-2 | ✅ Definido |
+| RT-002 | DynamoDB | Pay-per-request, pqrId PK | ✅ Definido |
+| RT-003 | API Gateway + Bedrock | Action Groups OpenAPI | ✅ Definido |
+| RT-004 | SNS | Email notifications | ✅ Definido |
+| RT-005 | Bedrock Agent | Claude 3.5 Sonnet | ✅ Definido |
+| RT-006 | CDK Stack | Infrastructure as Code | ✅ Definido |
 
 ## Roadmap Futuro (Post-MVP)
 
