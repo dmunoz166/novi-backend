@@ -1,0 +1,30 @@
+# Archivos temporales y binarios
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.pdf
+
+# Archivos de configuración local
+.env
+.env.local
+
+# Dependencias
+node_modules/
+__pycache__/
+*.pyc
+
+# Archivos de build
+dist/
+build/
+cdk.out/
+
+# Archivos de IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Archivos de sistema
+.DS_Store
+Thumbs.db
